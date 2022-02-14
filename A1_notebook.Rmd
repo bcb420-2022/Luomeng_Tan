@@ -1,0 +1,298 @@
+---
+title: "Assignment 1 - Notebook"
+author: "Luomeng Tan"
+date: "`r format(Sys.time(), '%d %b %Y')`"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Clean the data and map to HUGO symbols
+## 1 - Download the data
+
+First, I downloaded the data in GSE178521 (Hu et al., 2022). This data set have 
+6 samples, 3 replicates for the control (GFPkd1, GFPkd2, GFPkd3) and 3 replicates 
+for the test condition (PRMT5kd1, PRMT5kd2, PRMT5kd3).
+
+```{r}
+library(knitr)
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+if (!requireNamespace("GEOquery", quietly = TRUE))
+  BiocManager::install("GEOquery")
+
+library(GEOquery)
+
+# Download the supplementary file 
+if(!dir.exists('GSE178521')) {
+  sfiles = getGEOSuppFiles('GSE178521', fetch_files = TRUE)
+  (fnames <- rownames(sfiles))
+} else {
+  sfiles = getGEOSuppFiles('GSE178521', fetch_files = FALSE)
+  (fnames <- paste(getwd(), 'GSE178521', sfiles$fname, sep = "/"))
+}
+
+# we want to use the first file, which is the gene count matrix.
+raw_count <- read.delim(fnames[1], header = TRUE)
+```
+
+## 2 - Assess
+Let's briefly take a look at the count matrix. We have 58,825 rows (genes) in
+this data, and none of the gene_ids occur more than once. There are only about 
+20,000 - 25,000 genes in humans, but I got a lot more rows in my starting data.
+Based on my research, there might be some pseudo genes and non-coding 
+genes. I am not sure whether or not that is the case here, but I will filter
+this data first.
+```{r}
+# we have 58825 genes
+dim(raw_count)
+kable(raw_count[1:15, ], format = "pipe")
+
+# check duplicates
+any(table(raw_count$gene_id) > 1) 
+```
+
+I saw many rows with 0 count for all samples. I removed those rows with 0 count 
+for at least 3 samples. Now, we only got 15159 rows left, which seems to be a 
+good amount of genes. Using this number, the coverage of the data is about 
+61% - 76%.
+```{r}
+if (!requireNamespace("edgeR", quietly = TRUE))
+  BiocManager::install("edgeR")
+
+library(edgeR)
+cpms <- cpm(raw_count[,2:7])
+# get rid of low counts
+keep <- rowSums(cpms >1) >= 3
+count_filtered = raw_count[keep,]
+# we have 15159 genes left
+dim(count_filtered)
+kable(count_filtered[1:5, ], format = "pipe")
+```
+
+## 3 - Map
+Since this dataset only contains the gene IDs, I mapped the gene IDs to the HGNC 
+symbols using biomaRt.
+```{r}
+if (!requireNamespace("biomaRt", quietly = TRUE))
+  BiocManager::install("biomaRt")
+
+library(biomaRt)
+
+ensembl <- useMart("ensembl")
+ensembl <- useDataset("hsapiens_gene_ensembl", mart = ensembl)
+
+#check to see if PRMT5_id_conversion file exists
+conversion_stash <- "PRMT5_id_conversion.rds"
+if(file.exists(conversion_stash)){
+  PRMT5_id_conversion <- readRDS(conversion_stash)
+} else {
+  PRMT5_id_conversion <- getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                            filters = c("ensembl_gene_id"),
+                            values = count_filtered$gene_id,
+                            mart = ensembl)
+  saveRDS(PRMT5_id_conversion, conversion_stash)
+}
+```
+
+We don't have all of the genes mapped to HGNC symbols. I also noticed that many 
+of the genes don't get a meaningful HGNC symbols, with the symbol to be an empty
+string. I searched some of those gene IDs and found that those genes code for 
+novel proteins.
+```{r}
+# number of genes that aren't mapped
+nrow(count_filtered) - length(which(count_filtered$gene_id %in% 
+                                      PRMT5_id_conversion$ensembl_gene_id))
+
+# number of genes with HGNC symbols to be ''
+length(PRMT5_id_conversion$ensembl_gene_id[
+  which(PRMT5_id_conversion$hgnc_symbol == '')])
+
+# added HGNC symbols to our data frame using merge
+count_filtered_annot <- merge(PRMT5_id_conversion, count_filtered,
+                                 by.x = 1, by.y = 1, all.y = TRUE)
+
+kable(count_filtered_annot[1:5,1:5], type = "pipe")
+
+# We can check the number of genes aren't mapped or with HGNC symbols to be ''
+# in the merged data frame
+ensembl_id_missing_gene_index <- which(is.na(count_filtered_annot$hgnc_symbol) | 
+                                         count_filtered_annot$hgnc_symbol == '')
+
+length(ensembl_id_missing_gene_index)
+
+kable(count_filtered_annot[ensembl_id_missing_gene_index[1:10], 1:5], type = "pipe")
+```
+
+For those genes without a proper HGNC symbols, I used their gene IDs as their 
+HGNC symbols.
+```{r}
+count_filtered_annot$hgnc_symbol[ensembl_id_missing_gene_index] <- 
+  count_filtered_annot$ensembl_gene_id[ensembl_id_missing_gene_index]
+
+kable(count_filtered_annot[ensembl_id_missing_gene_index[1:10], 1:5], type = "pipe")
+```
+
+## 4 - Clean
+I chose not to remove any outliers since I think the data entries looks
+reasonable to me. Even though in the later section there are some entries to be negative infinity after cpm and log2 operation, I am not sure whether or not 
+those rows should be removed, so I chose not to remove them here. In the
+previous step, I have removed the rows with low counts.
+
+# Normalization
+I normalized the data using Trimmed Mean of M-values (TMM) normalization method in the edgeR (Robinson et al., 2010) package. TMM and Relative Log Expression (RLE) give similar results. I chose TMM since I am used to work with edgeR.
+```{r}
+# Create an edgeR container for count data
+filtered_data_matrix <- as.matrix(count_filtered_annot[,3:8])
+rownames(filtered_data_matrix) <- count_filtered_annot$hgnc_symbol
+d <- DGEList(counts = filtered_data_matrix, 
+             group = c('GFP', 'GFP', 'GFP', 'PRMT5', 'PRMT5', 'PRMT5'))
+
+# Calculate the normalization factors
+d <- calcNormFactors(d)
+normalized_counts <- cpm(d)
+```
+
+I plotted two box plots showing the samples before and after normalization. Before
+normalization, we saw that the replicates don't variate a lot. The plots look
+very similar before and after normalization, but we can still see slight 
+difference if we look carefully.
+```{r}
+par(mfrow=c(1,2))
+
+# plot the box plot BEFORE normalization
+data2plot_pre_norm <- log2(cpm(count_filtered_annot[ , 3:8]))
+boxplot(data2plot_pre_norm, xlab = "Samples", ylab = "log2 CPM", 
+        las = 2, cex = 0.5, cex.lab = 0.5, cex.main = 1,
+        cex.axis = 0.5, main = "GFPkd and PRMT5kd RNASeq Samples 
+        Before Normalization")
+#draw the median on each box plot
+abline(h = median(apply(data2plot_pre_norm, 2, median)), 
+       col = "green", lwd = 1, lty = "dashed")
+
+# plot the box plot AFTER normalization
+data2plot_post_norm <- log2(normalized_counts)
+boxplot(data2plot_post_norm, xlab = "Samples", ylab = "log2 CPM", 
+        las = 2, cex = 0.5, cex.lab = 0.5, cex.main = 1,
+        cex.axis = 0.5, main = "GFPkd and PRMT5kd RNASeq Samples 
+        After Normalization")
+#draw the median on each box plot
+abline(h = median(apply(data2plot_post_norm, 2, median)), 
+       col = "green", lwd = 1, lty = "dashed")
+
+```
+
+I also plotted the density plots for samples before and after normalization, and
+we also see very similar graphs before and after.
+```{r}
+par(mfrow=c(1,2))
+
+# Plot the density plot BEFORE normalization
+counts_density_pre_norm <- apply(data2plot_pre_norm, 2, density)
+
+xlim <- 0; ylim <- 0
+for (i in 1:length(counts_density_pre_norm)) {
+  xlim <- range(c(xlim, counts_density_pre_norm[[i]]$x)); 
+  ylim <- range(c(ylim, counts_density_pre_norm[[i]]$y))
+}
+
+cols <- rainbow(length(counts_density_pre_norm))
+ltys <- rep(1, length(counts_density_pre_norm))
+
+# plot the first density plot to initialize the plot
+plot(counts_density_pre_norm[[1]], xlim = xlim, ylim = ylim, type = "n", 
+     ylab = "Smoothing density of log2-CPM", 
+     main = "GFPkd and PRMT5kd RNASeq Samples 
+     Before Normalization", 
+     cex.lab = 0.8, cex.main = 1)
+
+# plot each line
+for (i in 1:length(counts_density_pre_norm)) {
+  lines(counts_density_pre_norm[[i]], col = cols[[i]])
+}
+
+# create legend
+legend("topright", colnames(data2plot_pre_norm),  
+       col = cols, lty = ltys, cex = 0.5, 
+       border = "blue",  text.col = "green4", 
+       merge = TRUE, bg = "gray90")
+
+# Plot the density plot AFTER normalization
+counts_density_post_norm <- apply(data2plot_post_norm, 2, density)
+
+xlim <- 0; ylim <- 0
+for (i in 1:length(counts_density_post_norm)) {
+  xlim <- range(c(xlim, counts_density_post_norm[[i]]$x)); 
+  ylim <- range(c(ylim, counts_density_post_norm[[i]]$y))
+}
+
+cols <- rainbow(length(counts_density_post_norm))
+ltys <- rep(1, length(counts_density_post_norm))
+
+# plot the first density plot to initialize the plot
+plot(counts_density_post_norm[[1]], xlim = xlim, ylim = ylim, type = "n", 
+     ylab = "Smoothing density of log2-CPM", 
+     main = "GFPkd and PRMT5kd RNASeq Samples 
+     After Normalization", 
+     cex.lab = 0.8, cex.main = 1)
+# plot each line
+for (i in 1:length(counts_density_post_norm)) {
+  lines(counts_density_post_norm[[i]], col = cols[[i]])
+}
+
+#create legend
+legend("topright", colnames(data2plot_post_norm),  
+       col = cols, lty = ltys, cex = 0.5, 
+       border = "blue",  text.col = "green4", 
+       merge = TRUE, bg = "gray90")
+```
+
+# Final result
+The final result after the normalization is the normalized_counts I have before.
+```{r}
+finalized_normalized_counts <- normalized_counts
+
+kable(finalized_normalized_counts[1:10, ], type = "pipe")
+```
+
+# Summary: Interpret, and document
+1. What are the control and test conditions of the dataset?
+* The purpose of this RNA-seq experiment is to identify the whether inhibition of 
+PRMT5 expression would affect the expression of certain genes related to 
+tumorigenesis. So the test condition here is the knockdown of PRMT5 and the 
+control is the knockdown of GFP.
+
+2. Why is the dataset of interest to you?
+* First, this dataset is an RNA-seq dataset with several replicates. Second, it is associated with human cancers, specifically lung cancer. I am very interested in 
+cancer biology, so I think this dataset is very suitable for me.
+
+3. Were there expression values that were not unique for specific genes? How did you handle these?
+* No. There was no duplicate rows for specific genes.
+
+4. Were there expression values that could not be mapped to current HUGO symbols?
+* Yes, there are 34 expression values that could not be mapped to current 
+HUGO symbols. Also, 951 values were mapped to an empty string. In total, 985 
+values aren't preoperly mapped, which is about 6%.
+
+5. How many outliers were removed?
+* None.
+
+6. How did you handle replicates?
+* In this dataset, there are 3 biological replicates for each condition. From 
+the box and density plots before normalization, I don't think there are any 
+outlier. The replicates didn't variate a lot.
+
+7. What is the final coverage of your dataset?
+* I got 15159 genes left after cleaning. So the final coverage of the data is 
+around 61% - 76%.
+
+# Refernce
+Hu, R., Zhou, B., Chen, Z., Chen, S., Chen, N., Shen, L., Xiao, H., & Zheng, Y. (2022). PRMT5 Inhibition Promotes PD-L1 Expression and Immuno-Resistance in Lung Cancer. Frontiers in immunology, 12, 722188. https://doi.org/10.3389/fimmu.2021.722188
+
+Robinson, M. D., McCarthy, D. J., & Smyth, G. K. (2010). edgeR: a Bioconductor package for differential expression analysis of digital gene expression data. Bioinformatics (Oxford, England), 26(1), 139–140. https://doi.org/10.1093/bioinformatics/btp616
+
+```{r}
+sessionInfo()
+```
