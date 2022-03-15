@@ -1,0 +1,297 @@
+---
+title: "Assignment 2 - Notebook"
+author: "Luomeng Tan"
+date: "`r format(Sys.time(), '%d %b %Y')`"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 2
+bibliography: A2.bib
+csl: apa-6th-edition.csl
+---
+
+# Before you start
+My journal entry of Assignment 2 can be found [here](https://github.com/bcb420-2022/Luomeng_Tan/wiki/7.-Assignment-2---Differential-Gene-expression-and-Preliminary-ORA).
+
+Please have all the files and directory in my [A2 directory](https://github.com/bcb420-2022/Luomeng_Tan/tree/main/A2) in GitHub repo in the same directory of the Rmd file in order to complie the Rmd file. The file strcture should look like below:
+
+* A2.bib
+* A2_LuomengTan.Rmd
+* apa-6th-edition.csl
+* figures/
+  * gProfiler_details_all.png
+  * gProfiler_details_down.jpg
+  * gProfiler_details_up.jpg
+  * gProfiler_results_all.png
+  * gProfiler_results_down.png
+  * gProfiler_results_up.png
+  * MDS_plot.png
+* normalized_counts.rds
+
+
+# Brief Introduction
+The data is from GSE178521 [@zheng_2022]. This data set have 
+6 samples, 3 replicates for the control with GFP knockdown (GFPkd1, GFPkd2, GFPkd3) 
+and 3 replicates for the test condition with PRMT5 knockdown (PRMT5kd1, PRMT5kd2, PRMT5kd3). The author aimed to figure out the function of PRMT5 in cancer cells.
+
+I cleaned the data by removing the genes with 0 count for at least 3 samples.
+We got 15159 genes left. I did not removed any outliers.
+
+I normalized the data using Trimmed Mean of M-values (TMM) normalization method 
+in the edgeR [@robinson_2010] package.
+
+# Differential Gene Expression
+
+## Load the data
+I loaded the normalized data from Assignment 1.
+```{r, message = FALSE, warning = FALSE}
+library(knitr)
+
+# Load the normalized expression data
+normalized_counts <- readRDS("./normalized_counts.rds")
+kable(normalized_counts[1:10,], type="pipe")
+```
+
+## MDS plot
+My model design is relatively simple, only based on conditions (GFPkd, and PRMT5kd),
+which is shown in the MDS plot below generated with data before normalization.
+However, it seems like there are some other factor affecting the result since 
+3 GFPkd samples also seems to be seperated by dim 2. Unfortunately I don't have 
+information on what extra variable I should use for this one, so I only include 
+conditions in my design.
+
+![](./figures/MDS_plot.png){height=50%, width=50%}
+
+**Figure 1**: MDS plot of 6 samples before normalization. The plot shows a clear seperation bewteen PRMT5kd samples and GFPkd samples. Thus, the conditions (PRMT5kd or GFPkd) should be the main factor that we would consider in the design of differetially expression analysis.
+
+## Differential gene expression analysis with edgeR
+I made the design matrix and fit the model to get the differential gene expression
+results.
+```{r, message = FALSE, warning = FALSE}
+library(edgeR)
+
+# The only variable in this dataset is the conditions of the samples
+condition <- c('GFPkd', 'GFPkd', 'GFPkd', 'PRMT5kd', 'PRMT5kd', 'PRMT5kd')
+model_design_pat <- model.matrix(
+  ~ condition)
+
+# Use edgeR to do the differential gene expression analysis
+# set up the edgeR object
+d <- DGEList(counts = normalized_counts, 
+             group = condition)
+
+# Estimate Dispersion - our model design.
+d <- estimateDisp(d, model_design_pat)
+
+# Fit the model
+fit <- glmQLFit(d, model_design_pat)
+
+# Calculate differential expression 
+qlf.gfp_vs_prmt5 <- glmQLFTest(fit, coef='conditionPRMT5kd')
+kable(topTags(qlf.gfp_vs_prmt5), type="pipe", row.names = FALSE)
+
+# Get all the results
+qlf_output_hits <- topTags(qlf.gfp_vs_prmt5, sort.by = "PValue",
+                           n = nrow(normalized_counts))
+```
+
+I used Benjamni-Hochberg (BH) correction [@benjamini_1995], which I believed is 
+the default method used in edgeR package. In the results, Pvalue is the original
+p-value, and FDR is the p-value after correction. We only got 7 genes that pass
+the correction. 
+
+```{r, message = FALSE, warning = FALSE}
+# number of genes that pass the threshold p-value < 0.05
+length(which(qlf_output_hits$table$PValue < 0.05))
+
+# number of genes that pass correction
+length(which(qlf_output_hits$table$FDR < 0.05))
+```
+
+## MA plot
+I ploted the MA plot below. The big red and blue points are the 7 significant
+genes that pass the correction. I lebeled Arg2 and CD274 in orange and dark green
+respectively. Those are the genes mentioned in the paper which is the negative 
+regulation of T cell molecules[@zheng_2022]. 
+
+```{r, message = FALSE, warning = FALSE}
+# get the result data we would use
+result <- qlf.gfp_vs_prmt5$table
+
+# We are interested in Arg2 and CD274
+gene_interest_index <- match(c("ARG2", "CD274"), rownames(result))
+
+# plot the MA plot
+plotMD(qlf.gfp_vs_prmt5, main = "Differential expression in PRMT5kd vs. GFPkd")
+abline(h = 0, lwd = 1, col = "grey")
+
+# label the genes of interest
+points(result$logCPM[gene_interest_index], result$logFC[gene_interest_index], 
+       pch = 20, col = c("orange", "darkgreen"), cex = 1)
+text(result$logCPM[gene_interest_index], result$logFC[gene_interest_index],
+     labels = rownames(result)[gene_interest_index], 
+     col = c("orange", "darkgreen"), 
+     cex = 1, pos = c(4, 3))
+```
+
+**Figure 2**: MA plot of our data, where each point is a gene. Grey points are all unsignificant genes. Red points are the 7 genes that pass the correction (FDR < 0.5). Arg2 and CS274 are labelled in orange and dark green respectively.
+
+As said in the paper, they are up-regulated [@zheng_2022]. However, based on my analysis, both of them got a bad p-value.
+```{r, message = FALSE, warning = FALSE}
+# data for Arg2 and CD274
+kable(qlf_output_hits$table[which(rownames(qlf_output_hits) == "ARG2" | rownames(qlf_output_hits) == "CD274"), ], type="pipe")
+```
+
+## Heatmap
+Since we only got 7 genes passing the correction, here I defined top hits as genes
+with p-value before correction < 0.05. From the heatmap we saw that the conditions 
+cluster together. It's obvious that the two conditions have distinct behaviour, 
+where the first group of genes are up-regulated in PRMT5kd samples and the second
+group of genes are down-regulated in PRMT5kd samples. Here we also saw some slight
+variations among the samples with the same condition.
+
+```{r, message = FALSE, warning = FALSE}
+
+library(circlize)
+library(ComplexHeatmap)
+
+heatmap_matrix <- normalized_counts
+
+top_hits <- rownames(qlf_output_hits$table)[
+  qlf_output_hits$table$PValue < 0.05]
+
+heatmap_matrix_tophits <- t(
+  scale(t(heatmap_matrix[which(rownames(heatmap_matrix) 
+                               %in% top_hits),])))
+if(min(heatmap_matrix_tophits) == 0){
+  heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)), 
+                           c( "white", "red"))
+} else {
+  heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0, 
+                             max(heatmap_matrix_tophits)), 
+                           c("blue", "white", "red"))
+}
+Heatmap(as.matrix(heatmap_matrix_tophits),
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_dend = TRUE,
+        show_column_dend = TRUE, 
+        col=heatmap_col,
+        show_column_names = TRUE, 
+        show_row_names = FALSE,
+        show_heatmap_legend = TRUE,
+        column_title = "Heatmap of top hits (p-value <= 0.05)", 
+        column_title_gp = gpar(fontsize = 20, fontface = "bold")
+)
+```
+
+**Figure 3**: Heatmap showing the correlation among the top hits (genes that pass the threshold p-value < 0.05). 6 samples are clearly separated into two clusters, and samples with the same condition (PRMT5kd or GFPkd) are clustered together.
+
+# Thresholded over-representation analysis
+
+## Save list of differentially expressed gene
+I will use the web interface of [g:Profiler](https://biit.cs.ut.ee/gprofiler/gost)[@raudvere_2019] to perform the thresholded over-representation analysis. I need a list of all differentially 
+expressed genes, a list of up-regulated genes, and a list of down-regulated genes 
+as the input to g:Profiler. Here I only want the significant differentially 
+expressed genes. Since I only got 7 genes that pass the correction, so I chose to
+use the 803 genes that pass the threshold p-value < 0.05.
+
+```{r, message = FALSE, warning = FALSE}
+# Get all genes that pass the threshold p-value < 0.05
+all_sig_diff_genes_df <- qlf_output_hits$table[
+  which(qlf_output_hits$table$PValue < 0.05), ]
+
+# Order the genes by p-value in ascending order
+all_sig_diff_genes_df <- all_sig_diff_genes_df[order(all_sig_diff_genes_df$PValue), ]
+
+# Get the gene symbols
+all_sig_diff_genes <- rownames(all_sig_diff_genes_df)
+sig_up_genes <- rownames(all_sig_diff_genes_df[
+  which(all_sig_diff_genes_df$logFC > 0), ])
+sig_down_genes <- rownames(all_sig_diff_genes_df[
+  which(all_sig_diff_genes_df$logFC < 0), ])
+
+# How many genes do we have in each list?
+length(all_sig_diff_genes)
+length(sig_up_genes)
+length(sig_down_genes)
+
+# Save the list of significant differentially expressed genes
+write(all_sig_diff_genes, "./all_sig_diff_genes.txt")
+write(sig_up_genes, "./sig_up_genes.txt")
+write(sig_down_genes, "./sig_down_genes.txt")
+```
+
+## Query options
+
+I used **Benjamini-Hochberg FDR** here since Benjamini-Hochberg correction was performed with edgeR package on my data. The threshold used was 0.05 to get 
+statistically significant results.  
+
+The annotation data source I used are Reactome, GO: biologoical process, and Wiki pathways. As said in the lecture, not all the sources are useful for the initial
+pathway analysis. Since I want to look at the pathways that those genes are 
+enriched in, I chose GO: biologoical process, Reactome, and Wiki pathways. I
+didn't use KEGG since in the lecture the professor said that KEGG have some weird
+pathway. The version I used was GRCh38.p13.
+
+For other options, I clicked "Ordered query" (since I order the genes by their
+p-value) and "All results".
+
+I clicked "Select the Ensembl ID with the most GO annotations" to deal with the 
+conflicts. 
+
+## Query result: All differentially expressed genes together
+We can see from the image below that with a threshold of 0.05, there are 1681 terms for GO:BP, 120 for RECT, and 9 for WP.
+
+![](./figures/gProfiler_results_all.png)
+
+**Figure 4**: Summary of the results of all significant differentially expressed genes in gProfiler. There 1681 terms for GO:BP, 120 terms for RECT, and 9 terms for WP.
+
+Below are the detailed results. We didn't see terms about negative regulation of T cells and type I INFγ response which was shown to be enriched for the differentially
+expressed genes in the PRMT5 knockdown cells (PRMT5kd) [@zheng_2022]. One possible reason for that is those genes that enriched for this two terms didn't pass the
+p-value threshold < 0.05 in my analysis (as Arg2 and CD274 shown above). It's hard to analyze the function of PRMT5 without knowing whether the terms are accosiated with up- or down-regulated genes.
+
+![](./figures/gProfiler_details_all.png)
+
+**Figure 5**: The details of the results of all significant differentially expressed genes in gProfiler. 
+
+## Query result: Up-regulated genes
+We can see from the image below that with a threshold of 0.05, there are 1365 terms for GO:BP, 60 for RECT, and 8 for WP.
+
+![](./figures/gProfiler_results_up.png)
+
+**Figure 6**: Summary of the results of significant up-regulated genes in gProfiler. There 1365 terms for GO:BP, 69 terms for RECT, and 8 terms for WP.
+
+Below are the detailed results for the gene that are up-regulated in the PRMT5 knockdown cells. The results are very similar the reuslts for all differentially expressed genes. The up-regulated genes are enriched in many terms related to negative regulation of some processes. This is somehow consistent with the paper where they said "PRMT5 inhibition decreased tumor cell survival" [@zheng_2022].
+
+
+![](./figures/gProfiler_details_up.jpg)
+
+**Figure 7**: The details of the results of significant up-regulated genes in gProfiler.
+
+## Query result: Down-regulated genes
+We can see from the image below that with a threshold of 0.05, there are 1013 terms for GO:BP, 194 for RECT, and 13 for WP.
+
+![](./figures/gProfiler_results_down.png)
+
+**Figure 8**: Summary of the results of significant down-regulated genes in gProfiler. There 1013 terms for GO:BP, 194 terms for RECT, and 13 terms for WP.
+
+Below are the detailed results for the gene that are down-regulated in the PRMT5 knockdown cells. Many terms are related to basic biological processes and we also saw mRNA processing under WP. Down-regulation of those genes could also support the idea that "PRMT5 inhibition decreased tumor cell survival" [@zheng_2022].
+
+![](./figures/gProfiler_details_down.jpg)
+
+**Figure 9**: The details of the results of significant down-regulated genes in gProfiler.
+
+##  Whole list v.s. seperated list
+Comparing the results using the whole list and using only up-/down-regulated genes, the results from the whole list contain many of the terms in the results using only up-/down-regulated genes but also have some terms that aren't in any of them. The results using only up-/down-regulated genes are more straightforward for us to use when analyzing the function of the target gene since we need to know whether we got more or less expression of the genes associated with those processes or pathways.
+
+# Interpretation
+1. Do the over-representation results support conclusions or mechanism discussed in the original paper?
+
+As I discussed in the previous section, the over-representation results support the conclusion that "PRMT5 inhibition decreased tumor cell survival" [@zheng_2022]. Please look at the previous section for details.
+
+2. Can you find evidence, i.e. publications, to support some of the results that you see. How does this evidence support your results.
+
+Since only a small part of the paper is related to the RNA-seq data that I analyzed in this assignment, there were not many details about the data and analysis in the paper. In the over-representation results, there were many terms that I am not sure whether they should be there. Looking at the background in the paper and their conclusion about the function of PRMT5, I am be a bit more certain that those terms make sense. For example, many down-regulated genes were enriched for some basic metabolic processes. Since we know that "PRMT5 inhibition decreased tumor cell survival" [@zheng_2022], we can then understand why those terms were present. However, I think this might not be a good practice in real-life lab work since we would have a bias when we are analyzing our data.
+
+# Refernce
