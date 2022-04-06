@@ -7,28 +7,12 @@ output:
     df_print: paged
     toc: true
     toc_depth: 2
-bibliography: A3.bib
-csl: apa-6th-edition.csl
+bibliography: ./A3/A3.bib
+csl: ./A3/apa-6th-edition.csl
 ---
 
 # Before you start
 My journal entry of Assignment 3 can be found [here](https://github.com/bcb420-2022/Luomeng_Tan/wiki/9.-Assignment-3---Data-set-Pathway-and-Network-Analysis).
-
-Please have all the files and directory in my [A3 directory](https://github.com/bcb420-2022/Luomeng_Tan/tree/main/A3) in GitHub repo in the same directory of the Rmd file in order to complie the Rmd file. The file strcture should look like below:
-
-* A3.bib
-* A3_LuomengTan.Rmd
-* apa-6th-edition.csl
-* figures/
-  * annotate.png
-  * EM_initial.png
-  * em.png
-  * legend.png
-  * post.png
-  * pub_ready.png
-  * overlap.png
-  * theme.png
-* qlf_output_hits.rds
 
 
 # Brief Introduction
@@ -57,7 +41,7 @@ To perform GSEA [@subramanian_2005], I needed to create the ranked set of genes.
 library(knitr)
 
 # load the edgeR result from A2
-qlf_output_hits <- readRDS("./qlf_output_hits.rds")
+qlf_output_hits <- readRDS("./A3/qlf_output_hits.rds")
 
 # added rank = -log10(p-value) * sign(logFC) into the dataframe
 qlf_output_hits[,"rank"] <- -log(qlf_output_hits$PValue, base = 10) * sign(qlf_output_hits$logFC)
@@ -66,7 +50,7 @@ qlf_output_hits <- qlf_output_hits[order(qlf_output_hits$rank, decreasing = TRUE
 
 # make the ranked list
 ranked_genes <- data.frame(GeneName = rownames(qlf_output_hits), rank = qlf_output_hits[,"rank"])
-write.table(ranked_genes, "./all_ranked_genes.rnk", quote = FALSE, row.names = FALSE, sep = "\t")
+write.table(ranked_genes, "./A3/all_ranked_genes.rnk", quote = FALSE, row.names = FALSE, sep = "\t")
 kable(ranked_genes[c(1:5, 15155:15159),], type="pipe")
 ```
 
@@ -112,10 +96,10 @@ I used Enrichment Map App and set FDR q-value cutoff to 0.01 to visulize the GSE
 
 There are 372 nodes and 6303 edges in the resulting map. The node cutoff is 0.01 and edge cutoff is 0.375.
 
-![Figure 1: Cytoscape settings for the intial enrichment map](./figures/EM_initial.png)
+![Figure 1: Cytoscape settings for the intial enrichment map](./A3/figures/EM_initial.png)
 
 
-![Figure 2: Enrichment Map for my GSEA results](./figures/em.png)
+![Figure 2: Enrichment Map for my GSEA results](./A3/figures/em.png)
 
 
 ## Annotate the network
@@ -126,21 +110,21 @@ I used the AutoAnnotate App in Cytoscape to add annotation to my results with th
 * Check "Layout network to prevent overlap"
 * Use default setting for other parameters
 
-![Figure 3: Result after annotation using AutoAnnotate](./figures/annotate.png)
+![Figure 3: Result after annotation using AutoAnnotate](./A3/figures/annotate.png)
 
 ## Publication ready figure 
 I made the publication ready figure by checking the "Publication-Ready" in EnrichmentMap panel.
 
-![Figure 4: Publication ready figure for our network](./figures/pub_ready.png)
+![Figure 4: Publication ready figure for our network](./A3/figures/pub_ready.png)
 
-![Figure 5: Legend of the enrichment map](./figures/legend.png)
+![Figure 5: Legend of the enrichment map](./A3/figures/legend.png)
 
 ## Theme Netowrk
 I tried to create a theme network by collapsing all clusters in AutoAnnotate, but I could only get the figure below, without any words.
 
 However, I would still looked at Figure 4 to find some major themes. The major themes includes apc g1 degradation, coupled transport electron, and decay nonsense targeting. I can't really fit those themes to the model, and I don't think there are any novel pathway or theme.
 
-![Figure 6: Failed theme network plot](./figures/theme.png)
+![Figure 6: Failed theme network plot](./A3/figures/theme.png)
 
 # Interpretation
 1. Do the enrichment results support conclusions or mechanism discussed in the original paper? How do these results differ from the results you got from Assignment #2 thresholded methods
@@ -159,12 +143,12 @@ I used the Mann-Whitney (two-sided) test with a cutoff of 0.05.
 
 Below are the terms that overlap:
 
-![Figure 7: Overlapped gene sets from nutraceutical drugs](./figures/overlap.png)
+![Figure 7: Overlapped gene sets from nutraceutical drugs](./A3/figures/overlap.png)
 
 The nutraceutical gene sets are mainly overlapped with the down-regulated gene sets in our dataset. I searched the NADH in DrugBank and NADH always serves as an electron carrier, which makes sense for the large overlap between the nutraceutical gene sets and the "coupled transport electron" which is down-regulated in the PRMT5kd cells.
 
 There are also papers and clinical trials shows the use of nutraceuticals in the treatment of lung cancers.
 
-![Figure 8: Enrichment Map with the nutraceutical gene sets](./figures/post.png)
+![Figure 8: Enrichment Map with the nutraceutical gene sets](./A3/figures/post.png)
 
 # Refernce
